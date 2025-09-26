@@ -1,0 +1,522 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>INYC Database</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins&display=swap" rel="stylesheet">
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Poppins', sans-serif;
+      background-color: #121212;
+      color: white;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      padding: 1rem;
+      background-color: #1e1e1e;
+    }
+
+    #searchBar {
+      flex-grow: 1;
+      margin-right: 1rem;
+      padding: 0.5rem;
+      font-size: 1rem;
+      border-radius: 5px;
+      border: none;
+    }
+
+    #addBtn {
+      background-color: green;
+      color: white;
+      font-size: 1.5rem;
+      border: none;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      cursor: pointer;
+    }
+
+    #formContainer {
+      display: none;
+      padding: 1rem;
+      background-color: #1e1e1e;
+    }
+    
+    #formContainer input {
+      display: block;
+      margin: 0.5rem 0;
+      padding: 0.5rem;
+      width: 100%;
+      font-size: 1rem;
+      border-radius: 5px;
+      border: none;
+      box-sizing: border-box;
+    }
+
+    #saveBtn, #cancelBtn {
+      background-color: orange;
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      font-size: 1rem;
+      border-radius: 5px;
+      cursor: pointer;
+      margin-right: 0.5rem;
+    }
+
+    #cancelBtn {
+      background-color: #666;
+    }
+
+    .patient-row {
+      padding: 1rem;
+      border-bottom: 1px solid #333;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .patient-details {
+      display: none;
+      padding: 1rem;
+      background-color: #2a2a2a;
+    }
+
+    .patient-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .edit-btn, .delete-btn {
+      padding: 0.25rem 0.5rem;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .edit-btn {
+      background-color: #007bff;
+      color: white;
+    }
+
+    .delete-btn {
+      background-color: #dc3545;
+      color: white;
+    }
+
+    .loading {
+      padding: 1rem;
+      text-align: center;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <input type="text" id="searchBar" placeholder="Search by name, complaint, or treatment">
+    <button id="addBtn">+</button>
+  </header>
+
+  <div id="formContainer">
+    <input type="text" id="room" placeholder="Room Number">
+    <input type="text" id="name" placeholder="Patient Name">
+    <input type="text" id="complaint" placeholder="Complaint">
+    <input type="text" id="treatments" placeholder="Treatments">
+    <div id="customFields"></div>
+    <button id="addFieldBtn" type="button" style="background-color: #007bff; color: white; border: none; padding: 0.5rem 1rem; font-size: 1rem; border-radius: 5px; cursor: pointer; margin-top: 0.5rem;">+ Add Field</button>
+    <div style="margin-top: 1rem;">
+      <button id="saveBtn">Save</button>
+      <button id="cancelBtn">Cancel</button>
+    </div>
+  </div>
+
+  <div id="patientList"></div>
+
+  <script>
+    const searchBar = document.getElementById('searchBar');
+    const addBtn = document.getElementById('addBtn');
+    const formContainer = document.getElementById('formContainer');
+    const saveBtn = document.getElementById('saveBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const patientList = document.getElementById('patientList');
+
+    let patients = [];
+    let editingPatientId = null;
+    let customFieldCount = 0;
+    let useLocalStorage = false;
+
+    // Local Storage functions (fallback when no server)
+    function saveToLocalStorage() {
+      localStorage.setItem('inyc_patients', JSON.stringify(patients));
+    }
+
+    function loadFromLocalStorage() {
+      const stored = localStorage.getItem('inyc_patients');
+      return stored ? JSON.parse(stored) : [];
+    }
+
+    // API functions with localStorage fallback
+    async function fetchPatients() {
+      try {
+        const response = await fetch('/api/patients');
+        if (response.ok) {
+          patients = await response.json();
+          useLocalStorage = false;
+        } else {
+          throw new Error('Server not available');
+        }
+        renderPatients();
+      } catch (error) {
+        console.log('Server not available, using local storage');
+        useLocalStorage = true;
+        patients = loadFromLocalStorage();
+        renderPatients();
+        // Update status message
+        if (patients.length === 0) {
+          patientList.innerHTML = '<div class="loading">No patients found. Add some patients to get started!</div>';
+        }
+      }
+    }
+
+    async function addPatient(patientData) {
+      if (useLocalStorage) {
+        // Local storage mode
+        const newPatient = { ...patientData, id: Date.now() };
+        patients.push(newPatient);
+        saveToLocalStorage();
+        renderPatients();
+        return true;
+      }
+      
+      try {
+        const response = await fetch('/api/patients', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(patientData),
+        });
+        
+        if (response.ok) {
+          fetchPatients();
+          return true;
+        } else {
+          const error = await response.json();
+          alert(error.error || 'Failed to add patient');
+          return false;
+        }
+      } catch (error) {
+        console.error('Error adding patient:', error);
+        alert('Error adding patient');
+        return false;
+      }
+    }
+
+    async function updatePatient(id, patientData) {
+      if (useLocalStorage) {
+        // Local storage mode
+        const patientIndex = patients.findIndex(p => p.id === id);
+        if (patientIndex !== -1) {
+          patients[patientIndex] = { ...patients[patientIndex], ...patientData };
+          saveToLocalStorage();
+          renderPatients();
+          return true;
+        }
+        return false;
+      }
+      
+      try {
+        const response = await fetch(`/api/patients/${id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(patientData),
+        });
+        
+        if (response.ok) {
+          fetchPatients();
+          return true;
+        } else {
+          const error = await response.json();
+          alert(error.error || 'Failed to update patient');
+          return false;
+        }
+      } catch (error) {
+        console.error('Error updating patient:', error);
+        alert('Error updating patient');
+        return false;
+      }
+    }
+
+    async function deletePatient(id) {
+      if (!confirm('Are you sure you want to delete this patient?')) {
+        return;
+      }
+      
+      if (useLocalStorage) {
+        // Local storage mode
+        patients = patients.filter(p => p.id !== id);
+        saveToLocalStorage();
+        renderPatients();
+        return;
+      }
+      
+      try {
+        const response = await fetch(`/api/patients/${id}`, {
+          method: 'DELETE',
+        });
+        
+        if (response.ok) {
+          fetchPatients();
+        } else {
+          const error = await response.json();
+          alert(error.error || 'Failed to delete patient');
+        }
+      } catch (error) {
+        console.error('Error deleting patient:', error);
+        alert('Error deleting patient');
+      }
+    }
+
+    function renderPatients(filter = '') {
+      patientList.innerHTML = '';
+      const filteredPatients = patients.filter(p => {
+        const searchTerm = filter.toLowerCase();
+        return p.name?.toLowerCase().includes(searchTerm) ||
+               p.complaint?.toLowerCase().includes(searchTerm) ||
+               p.treatments?.toLowerCase().includes(searchTerm) ||
+               (p.customFields && Object.values(p.customFields).some(value => 
+                 String(value).toLowerCase().includes(searchTerm)
+               ));
+      });
+
+      if (filteredPatients.length === 0) {
+        patientList.innerHTML = '<div class="loading">No patients found</div>';
+        return;
+      }
+
+      filteredPatients.forEach((patient, index) => {
+        const row = document.createElement('div');
+        row.className = 'patient-row';
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = patient.name;
+        nameSpan.onclick = () => toggleDetails(patient.id);
+        nameSpan.style.cursor = 'pointer';
+        nameSpan.style.flexGrow = '1';
+
+        const actions = document.createElement('div');
+        actions.className = 'patient-actions';
+        
+        const editBtn = document.createElement('button');
+        editBtn.className = 'edit-btn';
+        editBtn.textContent = 'Edit';
+        editBtn.onclick = (e) => {
+          e.stopPropagation();
+          editPatient(patient);
+        };
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'delete-btn';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.onclick = (e) => {
+          e.stopPropagation();
+          deletePatient(patient.id);
+        };
+
+        actions.appendChild(editBtn);
+        actions.appendChild(deleteBtn);
+        row.appendChild(nameSpan);
+        row.appendChild(actions);
+
+        const details = document.createElement('div');
+        details.className = 'patient-details';
+        details.id = `details-${patient.id}`;
+        let customFieldsHtml = '';
+        if (patient.customFields) {
+          for (const [key, value] of Object.entries(patient.customFields)) {
+            customFieldsHtml += `<strong>${key}:</strong> ${value}<br>`;
+          }
+        }
+        
+        details.innerHTML = `
+          <strong>Room:</strong> ${patient.room}<br>
+          <strong>Complaint:</strong> ${patient.complaint}<br>
+          <strong>Treatments:</strong> ${patient.treatments}<br>
+          ${customFieldsHtml}
+        `;
+
+        patientList.appendChild(row);
+        patientList.appendChild(details);
+      });
+    }
+
+    function toggleDetails(patientId) {
+      const details = document.getElementById(`details-${patientId}`);
+      if (details) {
+        details.style.display = details.style.display === 'block' ? 'none' : 'block';
+      }
+    }
+
+    function editPatient(patient) {
+      editingPatientId = patient.id;
+      document.getElementById('room').value = patient.room;
+      document.getElementById('name').value = patient.name;
+      document.getElementById('complaint').value = patient.complaint;
+      document.getElementById('treatments').value = patient.treatments;
+      
+      // Clear existing custom fields
+      clearCustomFields();
+      
+      // Load custom fields if they exist
+      if (patient.customFields) {
+        for (const [key, value] of Object.entries(patient.customFields)) {
+          addCustomField(key, value);
+        }
+      }
+      
+      formContainer.style.display = 'block';
+      saveBtn.textContent = 'Update';
+    }
+
+    function clearForm() {
+      document.getElementById('room').value = '';
+      document.getElementById('name').value = '';
+      document.getElementById('complaint').value = '';
+      document.getElementById('treatments').value = '';
+      clearCustomFields();
+      editingPatientId = null;
+      saveBtn.textContent = 'Save';
+      formContainer.style.display = 'none';
+    }
+    
+    function addCustomField(fieldName = '', fieldValue = '') {
+      const customFieldsContainer = document.getElementById('customFields');
+      const fieldId = `customField_${customFieldCount++}`;
+      
+      const fieldDiv = document.createElement('div');
+      fieldDiv.style.display = 'flex';
+      fieldDiv.style.gap = '0.5rem';
+      fieldDiv.style.marginTop = '0.5rem';
+      fieldDiv.id = fieldId;
+      
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.placeholder = 'Field name (e.g., Blood Type)';
+      nameInput.value = fieldName;
+      nameInput.style.width = '40%';
+      nameInput.className = 'custom-field-name';
+      
+      const valueInput = document.createElement('input');
+      valueInput.type = 'text';
+      valueInput.placeholder = 'Field value';
+      valueInput.value = fieldValue;
+      valueInput.style.width = '50%';
+      valueInput.className = 'custom-field-value';
+      
+      const removeBtn = document.createElement('button');
+      removeBtn.textContent = '×';
+      removeBtn.type = 'button';
+      removeBtn.style.backgroundColor = '#dc3545';
+      removeBtn.style.color = 'white';
+      removeBtn.style.border = 'none';
+      removeBtn.style.borderRadius = '3px';
+      removeBtn.style.cursor = 'pointer';
+      removeBtn.style.width = '30px';
+      removeBtn.style.height = '30px';
+      removeBtn.onclick = () => {
+        fieldDiv.remove();
+      };
+      
+      fieldDiv.appendChild(nameInput);
+      fieldDiv.appendChild(valueInput);
+      fieldDiv.appendChild(removeBtn);
+      customFieldsContainer.appendChild(fieldDiv);
+    }
+    
+    function clearCustomFields() {
+      document.getElementById('customFields').innerHTML = '';
+      customFieldCount = 0;
+    }
+    
+    function getCustomFieldsData() {
+      const customFields = {};
+      const fieldNames = document.querySelectorAll('.custom-field-name');
+      const fieldValues = document.querySelectorAll('.custom-field-value');
+      
+      for (let i = 0; i < fieldNames.length; i++) {
+        const name = fieldNames[i].value.trim();
+        const value = fieldValues[i].value.trim();
+        if (name && value) {
+          customFields[name] = value;
+        }
+      }
+      
+      return Object.keys(customFields).length > 0 ? customFields : null;
+    }
+
+    // Event listeners
+    addBtn.onclick = () => {
+      clearForm();
+      formContainer.style.display = 'block';
+    };
+    
+    document.getElementById('addFieldBtn').onclick = () => {
+      addCustomField();
+    };
+
+    cancelBtn.onclick = () => {
+      clearForm();
+    };
+
+    saveBtn.onclick = async () => {
+      const room = document.getElementById('room').value.trim();
+      const name = document.getElementById('name').value.trim();
+      const complaint = document.getElementById('complaint').value.trim();
+      const treatments = document.getElementById('treatments').value.trim();
+      
+      if (!room || !name || !complaint || !treatments) {
+        alert('Please fill out all required fields (Room, Name, Complaint, Treatments)');
+        return;
+      }
+
+      const patientData = { room, name, complaint, treatments };
+      const customFields = getCustomFieldsData();
+      if (customFields) {
+        patientData.customFields = customFields;
+      }
+      
+      let success = false;
+
+      if (editingPatientId) {
+        success = await updatePatient(editingPatientId, patientData);
+      } else {
+        success = await addPatient(patientData);
+      }
+
+      if (success) {
+        clearForm();
+      }
+    };
+
+    searchBar.oninput = () => {
+      renderPatients(searchBar.value);
+    };
+
+    // Initialize
+    patientList.innerHTML = '<div class="loading">Loading patients...</div>';
+    fetchPatients();
+
+    // Refresh data every 30 seconds to keep in sync with other users
+    setInterval(fetchPatients, 30000);
+  </script>
+</body>
+</html>
