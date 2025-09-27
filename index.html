@@ -6,10 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>INYC Database</title>
   <link href="https://fonts.googleapis.com/css2?family=Poppins&display=swap" rel="stylesheet">
-  
-  <!-- Firebase CDN -->
-  <script src="https://www.gstatic.com/firebasejs/10.1.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.1.0/firebase-firestore-compat.js"></script>
   <style>
     body {
       margin: 0;
@@ -120,7 +116,6 @@
       text-align: center;
       color: #666;
     }
-
   </style>
 </head>
 <body>
@@ -145,21 +140,6 @@
   <div id="patientList"></div>
 
   <script>
-    // Firebase Configuration - REPLACE WITH YOUR FIREBASE CONFIG
-    const firebaseConfig = {
-      apiKey: "your-api-key-here",
-      authDomain: "your-project-id.firebaseapp.com",
-      projectId: "your-project-id",
-      storageBucket: "your-project-id.appspot.com",
-      messagingSenderId: "123456789",
-      appId: "your-app-id"
-    };
-
-    // Initialize Firebase
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
-
-    // DOM Elements
     const searchBar = document.getElementById('searchBar');
     const addBtn = document.getElementById('addBtn');
     const formContainer = document.getElementById('formContainer');
@@ -170,61 +150,108 @@
     let patients = [];
     let editingPatientId = null;
     let customFieldCount = 0;
+    let useLocalStorage = false;
 
-    // Cloud Storage Functions
+    // Local Storage functions (fallback when no server)
+    function saveToLocalStorage() {
+      localStorage.setItem('inyc_patients', JSON.stringify(patients));
+    }
+
+    function loadFromLocalStorage() {
+      const stored = localStorage.getItem('inyc_patients');
+      return stored ? JSON.parse(stored) : [];
+    }
+
+    // API functions with localStorage fallback
     async function fetchPatients() {
       try {
-        patientList.innerHTML = '<div class="loading">Loading patients...</div>';
-        const snapshot = await db.collection('patients')
-          .orderBy('createdAt', 'desc')
-          .get();
-        
-        patients = [];
-        snapshot.forEach(doc => {
-          patients.push({ id: doc.id, ...doc.data() });
-        });
-        
+        const response = await fetch('/api/patients');
+        if (response.ok) {
+          patients = await response.json();
+          useLocalStorage = false;
+        } else {
+          throw new Error('Server not available');
+        }
         renderPatients();
+      } catch (error) {
+        console.log('Server not available, using local storage');
+        useLocalStorage = true;
+        patients = loadFromLocalStorage();
+        renderPatients();
+        // Update status message
         if (patients.length === 0) {
           patientList.innerHTML = '<div class="loading">No patients found. Add some patients to get started!</div>';
         }
-      } catch (error) {
-        console.error('Error fetching patients:', error);
-        patientList.innerHTML = '<div class="loading">Error loading patients. Check your Firebase configuration.</div>';
       }
     }
 
     async function addPatient(patientData) {
-      try {
-        const newPatient = {
-          ...patientData,
-          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        };
-        
-        await db.collection('patients').add(newPatient);
-        fetchPatients(); // Refresh the list
+      if (useLocalStorage) {
+        // Local storage mode
+        const newPatient = { ...patientData, id: Date.now() };
+        patients.push(newPatient);
+        saveToLocalStorage();
+        renderPatients();
         return true;
+      }
+      
+      try {
+        const response = await fetch('/api/patients', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(patientData),
+        });
+        
+        if (response.ok) {
+          fetchPatients();
+          return true;
+        } else {
+          const error = await response.json();
+          alert(error.error || 'Failed to add patient');
+          return false;
+        }
       } catch (error) {
         console.error('Error adding patient:', error);
-        alert('Error adding patient: ' + error.message);
+        alert('Error adding patient');
         return false;
       }
     }
 
     async function updatePatient(id, patientData) {
+      if (useLocalStorage) {
+        // Local storage mode
+        const patientIndex = patients.findIndex(p => p.id === id);
+        if (patientIndex !== -1) {
+          patients[patientIndex] = { ...patients[patientIndex], ...patientData };
+          saveToLocalStorage();
+          renderPatients();
+          return true;
+        }
+        return false;
+      }
+      
       try {
-        const updatedData = {
-          ...patientData,
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        };
+        const response = await fetch(`/api/patients/${id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(patientData),
+        });
         
-        await db.collection('patients').doc(id).update(updatedData);
-        fetchPatients(); // Refresh the list
-        return true;
+        if (response.ok) {
+          fetchPatients();
+          return true;
+        } else {
+          const error = await response.json();
+          alert(error.error || 'Failed to update patient');
+          return false;
+        }
       } catch (error) {
         console.error('Error updating patient:', error);
-        alert('Error updating patient: ' + error.message);
+        alert('Error updating patient');
         return false;
       }
     }
@@ -234,12 +261,28 @@
         return;
       }
       
+      if (useLocalStorage) {
+        // Local storage mode
+        patients = patients.filter(p => p.id !== id);
+        saveToLocalStorage();
+        renderPatients();
+        return;
+      }
+      
       try {
-        await db.collection('patients').doc(id).delete();
-        fetchPatients(); // Refresh the list
+        const response = await fetch(`/api/patients/${id}`, {
+          method: 'DELETE',
+        });
+        
+        if (response.ok) {
+          fetchPatients();
+        } else {
+          const error = await response.json();
+          alert(error.error || 'Failed to delete patient');
+        }
       } catch (error) {
         console.error('Error deleting patient:', error);
-        alert('Error deleting patient: ' + error.message);
+        alert('Error deleting patient');
       }
     }
 
@@ -451,9 +494,6 @@
         patientData.customFields = customFields;
       }
       
-      saveBtn.disabled = true;
-      saveBtn.textContent = 'Saving...';
-      
       let success = false;
 
       if (editingPatientId) {
@@ -462,61 +502,21 @@
         success = await addPatient(patientData);
       }
 
-      saveBtn.disabled = false;
-      saveBtn.textContent = editingPatientId ? 'Update' : 'Save';
-
       if (success) {
         clearForm();
       }
     };
-
 
     searchBar.oninput = () => {
       renderPatients(searchBar.value);
     };
 
     // Initialize
-    patientList.innerHTML = '<div class="loading">Initializing...</div>';
-    
-    // Check if Firebase is properly configured
-    if (firebaseConfig.apiKey === "your-api-key-here") {
-      patientList.innerHTML = `
-        <div class="loading">
-          <h3>⚠️ Firebase Configuration Required</h3>
-          <p>To enable cloud sync across devices, you need to:</p>
-          <ol style="text-align: left; max-width: 500px; margin: 0 auto;">
-            <li>Create a Firebase project at <a href="https://console.firebase.google.com" target="_blank" style="color: #007bff;">Firebase Console</a></li>
-            <li>Enable Firestore Database</li>
-            <li>Set Firestore security rules to allow public read/write access</li>
-            <li>Replace the Firebase configuration in this HTML file</li>
-          </ol>
-          <p style="margin-top: 1rem; font-size: 0.9rem; color: #888;">
-            Without Firebase setup, data will only be stored locally on each device.
-          </p>
-        </div>
-      `;
-      
-      // Fallback to localStorage if Firebase is not configured
-      let useLocalStorage = true;
-      loadFromLocalStorage();
-    } else {
-      // Firebase is configured, try to fetch data
-      fetchPatients();
-    }
-    
-    // Add fallback localStorage functions for when Firebase is not configured
-    function saveToLocalStorage() {
-      localStorage.setItem('inyc_patients', JSON.stringify(patients));
-    }
+    patientList.innerHTML = '<div class="loading">Loading patients...</div>';
+    fetchPatients();
 
-    function loadFromLocalStorage() {
-      const stored = localStorage.getItem('inyc_patients');
-      patients = stored ? JSON.parse(stored) : [];
-      renderPatients();
-      if (patients.length === 0) {
-        patientList.innerHTML = '<div class="loading">No patients found. Add some patients to get started!</div>';
-      }
-    }
+    // Refresh data every 30 seconds to keep in sync with other users
+    setInterval(fetchPatients, 30000);
   </script>
 </body>
 </html>
